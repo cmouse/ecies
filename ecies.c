@@ -70,26 +70,28 @@ int EC_POINT_derive_S(const EC_GROUP *group, const EC_POINT *key, point_conversi
 	return ret;
 }
 
-BIGNUM *EC_KEY_derive_S(const EC_KEY *key, const BIGNUM *R, BIGNUM *S)
+int EC_KEY_derive_S(const EC_KEY *key, const BIGNUM *R, BIGNUM *S)
 {
+	int ret = -1;
 	BN_CTX *ctx = BN_CTX_new();
 	BIGNUM *n = BN_new();
 	BIGNUM *Py = BN_new();
 	const EC_GROUP *group = EC_KEY_get0_group(key);
 	EC_POINT *Rp = EC_POINT_bn2point(group, R, NULL, ctx);
 	const BIGNUM *kB = EC_KEY_get0_private_key(key);
-	if (S == NULL) S = BN_new();
 	EC_GROUP_get_order(group, n, ctx);
+	/* Calculate S = Px, P = (Px, Py) = R kB */
 	EC_POINT *P = EC_POINT_mult_BN(group, NULL, Rp, kB, ctx);
 	if (!EC_POINT_is_at_infinity(group, P)) {
 		EC_POINT_get_affine_coordinates_GF2m(group, P, S, Py, ctx);
+		ret = 0;
 	}
 	BN_free(n);
 	BN_free(Py);
 	EC_POINT_free(Rp);
 	EC_POINT_free(P);
 	BN_CTX_free(ctx);
-	return S;
+	return ret;
 }
 
 int decipher(const EC_KEY *key,
@@ -97,7 +99,9 @@ int decipher(const EC_KEY *key,
 	const unsigned char *d_in, size_t d_len)
 {
 	BIGNUM *R = BN_bin2bn(R_in, R_len, BN_new());
-	BIGNUM *S = EC_KEY_derive_S(key, R, BN_new());
+	BIGNUM *S = BN_new();
+
+	EC_KEY_derive_S(key, R, S);
 
         printf("S_decipher = ");
         BN_print_fp(stdout, S);
