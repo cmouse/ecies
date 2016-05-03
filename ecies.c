@@ -25,7 +25,7 @@ void RAND_init(void) {
 
 EC_POINT *EC_POINT_mult_BN(const EC_GROUP *group, EC_POINT *P, const EC_POINT *a, const BIGNUM *b, BN_CTX *ctx)
 {
-	EC_POINT *Z = EC_POINT_new(group);
+	EC_POINT *O = EC_POINT_new(group);
 	if (P == NULL) P = EC_POINT_new(group);
 
 	for(int i = BN_num_bits(b); i >= 0; i--) {
@@ -33,7 +33,7 @@ EC_POINT *EC_POINT_mult_BN(const EC_GROUP *group, EC_POINT *P, const EC_POINT *a
 		if (BN_is_bit_set(b, i))
 			EC_POINT_add(group, P, P, a, ctx);
 		else
-			EC_POINT_add(group, P, P, Z, ctx);
+			EC_POINT_add(group, P, P, O, ctx);
 	}
 
 	return P;
