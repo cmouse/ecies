@@ -11,9 +11,13 @@
 
 const char key[] = \
 "-----BEGIN PRIVATE KEY-----\n" \
-"MFACAQAwEAYHKoZIzj0CAQYFK4EEAAQEOTA3AgEBBA69/41cvj8sXnrowXqhUKEi\n" \
-"AyAABADcsXP3zhDGB6sd56MYYwFJsNoMbH5ps6NkcHh18g==\n" \
-"-----END PRIVATE KEY-----";
+"MIIBAAIBADAQBgcqhkjOPQIBBgUrgQQAJwSB6DCB5QIBAQRIArxG5w0ydYPXKOh8\n" \
+"NDD78GSW3yioDSf6a/nVmrLU7uokoqHGh8DhZczsed7PIen1sjJSRFQvpTfXzW6g\n" \
+"yvBTiQHmRxmwWgx8oYGVA4GSAAQFFd9vDBbNrTpj4fqijc/r0SsjNsux05RlH35k\n" \
+"4iKmOScufwf3qjLdQwlRVb2gxU9xqyf5zzye4cRypgWxuEmMb0/vy/bdvMkGS7HS\n" \
+"Tl7dD4tWKGhGAB4oV2roBC6B5tTLFzpQL+SjqabQDjwCIrw9rhsoR5UTrcikJioa\n" \
+"nzwv/wzEUsNPrLSUfMq1dYvt3hk=\n" \
+"-----END PRIVATE KEY-----\n";
 
 void RAND_init(void) {
 	char buf[32];
@@ -39,9 +43,11 @@ EC_POINT *EC_POINT_mult_BN(const EC_GROUP *group, EC_POINT *P, const EC_POINT *a
 	return P;
 }
 
-int EC_POINT_derive_S(const EC_GROUP *group, const EC_POINT *key, point_conversion_form_t fmt, BIGNUM *S, BIGNUM *R)
+int EC_KEY_public_derive_S(const EC_KEY *key, point_conversion_form_t fmt, BIGNUM *S, BIGNUM *R)
 {
 	BN_CTX *ctx = BN_CTX_new();
+	const EC_GROUP *group = EC_KEY_get0_group(key);
+	const EC_POINT *Kb = EC_KEY_get0_public_key(key);
 	BIGNUM *n = BN_new();
 	BIGNUM *r = BN_new();
 	EC_POINT *P = NULL;
@@ -55,7 +61,7 @@ int EC_POINT_derive_S(const EC_GROUP *group, const EC_POINT *key, point_conversi
 	/* calculate R = rG */
 	Rp = EC_POINT_mult_BN(group, Rp, G, r, ctx);
 	/* calculate S = Px, P = (Px,Py) = Kb R */
-	P = EC_POINT_mult_BN(group, P, key, r, ctx);
+	P = EC_POINT_mult_BN(group, P, Kb, r, ctx);
 	if (!EC_POINT_is_at_infinity(group, P)) {
 		EC_POINT_get_affine_coordinates_GF2m(group, P, S, Py, ctx);
 		EC_POINT_point2bn(group, Rp, fmt, R, ctx);
@@ -70,7 +76,7 @@ int EC_POINT_derive_S(const EC_GROUP *group, const EC_POINT *key, point_conversi
 	return ret;
 }
 
-int EC_KEY_derive_S(const EC_KEY *key, const BIGNUM *R, BIGNUM *S)
+int EC_KEY_private_derive_S(const EC_KEY *key, const BIGNUM *R, BIGNUM *S)
 {
 	int ret = -1;
 	BN_CTX *ctx = BN_CTX_new();
@@ -96,12 +102,15 @@ int EC_KEY_derive_S(const EC_KEY *key, const BIGNUM *R, BIGNUM *S)
 
 int decipher(const EC_KEY *key,
 	const unsigned char *R_in, size_t R_len, const unsigned char *c_in, size_t c_len, 
-	const unsigned char *d_in, size_t d_len)
+	const unsigned char *d_in, size_t d_len, const unsigned char *salt, size_t salt_len)
 {
 	BIGNUM *R = BN_bin2bn(R_in, R_len, BN_new());
 	BIGNUM *S = BN_new();
 
-	EC_KEY_derive_S(key, R, S);
+	if (EC_KEY_private_derive_S(key, R, S) != 0) {
+		printf("Key derivation failed\n");
+		return -1;
+	}
 
         printf("S_decipher = ");
         BN_print_fp(stdout, S);
@@ -122,7 +131,7 @@ int decipher(const EC_KEY *key,
         size_t dc_len = 0;
         int outl = 0;
 
-        PKCS5_PBKDF2_HMAC((const char*)password, S_len, (const unsigned char*)"12345678", 8, 2000, md, ke_len+km_len, ke_km);
+        PKCS5_PBKDF2_HMAC((const char*)password, S_len, salt, salt_len, 2000, md, ke_len+km_len, ke_km);
 
         unsigned char dv_out[km_len];
         unsigned int dv_len;
@@ -144,26 +153,15 @@ int decipher(const EC_KEY *key,
 	return 0;
 }
 
-int main(void) {
-	OpenSSL_add_all_algorithms();
-	ERR_load_crypto_strings();
-	RAND_init();
-
-	BIO *b = BIO_new_mem_buf((void*)key, sizeof(key));
-	EVP_PKEY *pkey = NULL;
-	EC_KEY *eckey = NULL;
-
-	PEM_read_bio_PrivateKey(b, &pkey, NULL, NULL);
-
-	eckey = EVP_PKEY_get1_EC_KEY(pkey);
-
-	const EC_POINT *pub = EC_KEY_get0_public_key(eckey);
-	const EC_GROUP *grp = EC_KEY_get0_group(eckey);
-
+int encipher(const EC_KEY *key,
+	unsigned char *R_out, size_t *R_len, unsigned char *c_out, size_t *c_len,
+	unsigned char *d_out, size_t *d_len, const unsigned char *salt, size_t salt_len)
+{
 	BIGNUM *R = BN_new();
 	BIGNUM *S = BN_new();
 
-	EC_POINT_derive_S(grp, pub, POINT_CONVERSION_COMPRESSED, S, R);
+	/* make sure it's not at infinity */
+	while(EC_KEY_public_derive_S(key, POINT_CONVERSION_COMPRESSED, S, R) != 0);
 
 	printf("R = ");
 	BN_print_fp(stdout, R);
@@ -183,32 +181,53 @@ int main(void) {
 	size_t ke_len = EVP_CIPHER_key_length(cipher) + EVP_CIPHER_iv_length(cipher);
 	size_t km_len = EVP_MD_block_size(md);
 	unsigned char ke_km[ke_len+km_len];
-
-	unsigned char c_out[2048];
-	size_t c_len = 0;
+	*c_len = 0;
 	int outl = 0;
 
-	PKCS5_PBKDF2_HMAC((const char*)password, S_len, (const unsigned char*)"12345678", 8, 2000, md, ke_len+km_len, ke_km);
+	PKCS5_PBKDF2_HMAC((const char*)password, S_len, salt, salt_len, 2000, md, ke_len+km_len, ke_km);
 
 	EVP_CIPHER_CTX *ectx = EVP_CIPHER_CTX_new();
 
 	EVP_EncryptInit_ex(ectx, cipher, NULL, ke_km, ke_km + EVP_CIPHER_key_length(cipher));
-	EVP_EncryptUpdate(ectx, c_out + c_len, &outl, (const unsigned char*)"super secret message", 20);
-	c_len += outl;
-	EVP_EncryptFinal_ex(ectx, c_out + c_len, &outl);
-	c_len += outl;
+	EVP_EncryptUpdate(ectx, c_out + *c_len, &outl, (const unsigned char*)"super secret message", 20);
+	*c_len += outl;
+	EVP_EncryptFinal_ex(ectx, c_out + *c_len, &outl);
+	*c_len += outl;
+
+	unsigned int len;
 
 	/* calculate MAC */
-	unsigned char d_out[km_len];
-	unsigned int d_len;
-	HMAC(md, ke_km + ke_len, km_len, c_out, c_len, d_out, &d_len);
+	HMAC(md, ke_km + ke_len, km_len, c_out, *c_len, d_out, &len);
+
+	*d_len = len;
 
 	/* then reverse operation */
-	size_t R_len = BN_num_bytes(R);
-	unsigned char R_out[R_len];
+	*R_len = BN_num_bytes(R);
 	BN_bn2bin(R, R_out);
 
-	decipher(eckey, R_out, R_len, c_out, c_len, d_out, d_len);
+	return 0;
+}
+
+int main(void) {
+	unsigned char R[512], D[512], c[512], salt[16];
+	size_t R_len, D_len, c_len;
+
+        OpenSSL_add_all_algorithms();
+        ERR_load_crypto_strings();
+        RAND_init();
+
+        BIO *b = BIO_new_mem_buf((void*)key, sizeof(key));
+        EVP_PKEY *pkey = NULL;
+        EC_KEY *eckey = NULL;
+
+        PEM_read_bio_PrivateKey(b, &pkey, NULL, NULL);
+
+        eckey = EVP_PKEY_get1_EC_KEY(pkey);
+
+	RAND_bytes(salt, sizeof(salt));
+
+	encipher(eckey, R, &R_len, c, &c_len, D, &D_len, salt, sizeof(salt));
+	decipher(eckey, R, R_len, c, c_len, D, D_len, salt, sizeof(salt));
 
 	return 0;
 }
