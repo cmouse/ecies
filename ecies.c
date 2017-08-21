@@ -19,14 +19,6 @@ const char key[] = \
 "nzwv/wzEUsNPrLSUfMq1dYvt3hk=\n" \
 "-----END PRIVATE KEY-----\n";
 
-void RAND_init(void) {
-	char buf[32];
-	FILE *fin = fopen("/dev/random","rb");
-	fread(buf, sizeof(buf), 1, fin);
-	fclose(fin);
-	RAND_seed(fin, 32);
-}
-
 EC_POINT *EC_POINT_mult_BN(const EC_GROUP *group, EC_POINT *P, const EC_POINT *a, const BIGNUM *b, BN_CTX *ctx)
 {
 	EC_POINT *O = EC_POINT_new(group);
@@ -116,16 +108,16 @@ int decipher(const EC_KEY *key,
         BN_print_fp(stdout, S);
         printf("\n");
 
-        size_t S_len = BN_num_bytes(S);
-        unsigned char password[S_len];
-        BN_bn2bin(S, password);
+	size_t S_len = BN_num_bytes(S);
+	unsigned char * password = (unsigned char*)malloc(S_len);
+	BN_bn2bin(S, password);
 
-        /* then we can move on to traditional crypto using pbkdf2 we generate keys */
-        const EVP_MD *md = EVP_sha1();
-        const EVP_CIPHER *cipher = EVP_aes_256_cbc();
-        size_t ke_len = EVP_CIPHER_key_length(cipher) + EVP_CIPHER_iv_length(cipher);
-        size_t km_len = EVP_MD_block_size(md);
-        unsigned char ke_km[ke_len+km_len];
+	/* then we can move on to traditional crypto using pbkdf2 we generate keys */
+	const EVP_MD *md = EVP_sha1();
+	const EVP_CIPHER *cipher = EVP_aes_256_cbc();
+	size_t ke_len = EVP_CIPHER_key_length(cipher) + EVP_CIPHER_iv_length(cipher);
+	size_t km_len = EVP_MD_block_size(md);
+	unsigned char * ke_km = (unsigned char*)malloc(ke_len + km_len);
 
         unsigned char dc_out[2048] = {0};
         size_t dc_len = 0;
@@ -133,9 +125,9 @@ int decipher(const EC_KEY *key,
 
         PKCS5_PBKDF2_HMAC((const char*)password, S_len, salt, salt_len, 2000, md, ke_len+km_len, ke_km);
 
-        unsigned char dv_out[km_len];
-        unsigned int dv_len;
-        HMAC(md, ke_km + ke_len, km_len, c_in, c_len, dv_out, &dv_len);
+	unsigned char * dv_out = (unsigned char*)malloc(km_len);
+	unsigned int dv_len;
+	HMAC(md, ke_km + ke_len, km_len, c_in, c_len, dv_out, &dv_len);
 
 	if (d_len != dv_len || memcmp(dv_out, d_in, dv_len) != 0)
 		printf("MAC verification failed\n");
@@ -150,6 +142,9 @@ int decipher(const EC_KEY *key,
 	dc_out[dc_len] = 0;
 	printf("%s\n", dc_out);
 
+	free(dv_out);
+	free(password);
+	free(ke_km);
 	return 0;
 }
 
@@ -172,7 +167,7 @@ int encipher(const EC_KEY *key,
 	printf("\n");
 
 	size_t S_len = BN_num_bytes(S);
-	unsigned char password[S_len];
+	unsigned char * password = (unsigned char*)malloc(S_len);
 	BN_bn2bin(S, password);
 
 	/* then we can move on to traditional crypto using pbkdf2 we generate keys */
@@ -180,7 +175,7 @@ int encipher(const EC_KEY *key,
 	const EVP_CIPHER *cipher = EVP_aes_256_cbc();
 	size_t ke_len = EVP_CIPHER_key_length(cipher) + EVP_CIPHER_iv_length(cipher);
 	size_t km_len = EVP_MD_block_size(md);
-	unsigned char ke_km[ke_len+km_len];
+	unsigned char * ke_km = (unsigned char*)malloc(ke_len + km_len);
 	*c_len = 0;
 	int outl = 0;
 
@@ -205,6 +200,8 @@ int encipher(const EC_KEY *key,
 	*R_len = BN_num_bytes(R);
 	BN_bn2bin(R, R_out);
 
+	free(ke_km);
+	free(password);
 	return 0;
 }
 
@@ -212,9 +209,9 @@ int main(void) {
 	unsigned char R[512], D[512], c[512], salt[16];
 	size_t R_len, D_len, c_len;
 
-        OpenSSL_add_all_algorithms();
-        ERR_load_crypto_strings();
-        RAND_init();
+	OpenSSL_add_all_algorithms();
+	ERR_load_crypto_strings();
+	//RAND_init();
 
         BIO *b = BIO_new_mem_buf((void*)key, sizeof(key));
         EVP_PKEY *pkey = NULL;
